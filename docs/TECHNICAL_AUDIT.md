@@ -30,7 +30,7 @@ Verified as sound by reading:
 - `FinancialSummary`: per-loan `max(0, …)` for outstanding and advance, so one loan's advance never offsets another's balance; cancelled loans and payments excluded.
 
 Gaps found:
-1. **No overdue logic exists.** A search for "overdue" finds nothing in `src`. Overdue installments/dashboard metrics requested in the brief are missing.
+1. **No portfolio-level overdue tracking.** The word "overdue" appears nowhere in `src`, and there is no overdue count/amount on the dashboard or reports. *Correction to the first revision of this audit:* the loan-detail installment list does flag a past-due unpaid installment (`dueDate < today`), originally labelled "Outstanding"; it is labelled "Overdue" on `feature/premium-ui-polish`.
 2. **Loan status has only `ACTIVE` and `CANCELLED`.** No transition to a completed/paid state; "Paid" in the UI is derived per installment only.
 3. **Duplicate-submission protection is unverified** for the payment and loan forms (repository has no idempotency key; receipt numbers are time + 4 random hex chars protected only by a unique index).
 4. `LoanMath` overflow surfaces as `ArithmeticException`; whether the UI maps it to a friendly message was not traced.
@@ -59,7 +59,7 @@ Gaps found:
 ## 6. Recommended order of work (once a build environment exists)
 
 1. Get the baseline compiling and its 38 tests passing (CI or Android Studio). Fix whatever that reveals before any redesign.
-2. Add overdue calculation (pure Kotlin + tests) and a completed-loan status rule.
+2. Add portfolio-level overdue calculation (pure Kotlin + tests) and a completed-loan status rule.
 3. Session auto-lock (lifecycle-aware), constant-time hash compare, PBKDF2 parameter versioning.
 4. Backup: optional passphrase-based authenticated encryption (AES-GCM with a PBKDF2/scrypt-derived key), HMAC/AEAD tag instead of bare SHA-256, format version 2 with v1 import kept.
 5. Room `exportSchema=true`, schema directory, migration tests.

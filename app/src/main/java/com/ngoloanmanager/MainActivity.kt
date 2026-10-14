@@ -3,10 +3,13 @@ package com.ngoloanmanager
 import android.os.Bundle
 import android.util.Base64
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,16 +17,21 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +43,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.room.withTransaction
@@ -54,8 +65,10 @@ import com.ngoloanmanager.domain.userMessage
 import com.ngoloanmanager.ui.components.*
 import com.ngoloanmanager.ui.theme.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.math.BigDecimal
 import java.security.SecureRandom
 import java.time.LocalDate
@@ -82,6 +95,10 @@ private fun hashPassword(password: String, salt: ByteArray): String {
         Base64.NO_WRAP
     )
 }
+
+/** Constant-time comparison of two password hashes (avoids leaking how many leading characters matched). */
+private fun hashesMatch(a: String, b: String): Boolean =
+    java.security.MessageDigest.isEqual(a.toByteArray(Charsets.UTF_8), b.toByteArray(Charsets.UTF_8))
 
 private fun money(poisha: Long): String =
     "৳" + BigDecimal.valueOf(poisha).divide(BigDecimal("100")).setScale(2).toPlainString()
@@ -126,6 +143,7 @@ private fun LoanApp(db: LoanDatabase) {
     var loggedIn by remember { mutableStateOf(false) }
     var setup by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         authReady = dao.admin() != null
         setup = authReady == false
@@ -140,7 +158,10 @@ private fun LoanApp(db: LoanDatabase) {
         AuthScreen(
             firstRun = setup,
             error = error,
+            busy = busy,
             onSubmit = { username, password ->
+                if (busy) return@AuthScreen
+                busy = true
                 scope.launch {
                     try {
                         val current = dao.admin()
@@ -151,7 +172,7 @@ private fun LoanApp(db: LoanDatabase) {
                                 AdminEntity(
                                     username = username.trim().ifBlank { "admin" },
                                     salt = Base64.encodeToString(salt, Base64.NO_WRAP),
-                                    passwordHash = hashPassword(password, salt)
+                                    passwordHash = withContext(Dispatchers.Default) { hashPassword(password, salt) }
                                 )
                             )
                             dao.audit(
@@ -167,8 +188,10 @@ private fun LoanApp(db: LoanDatabase) {
                             error = ""
                         } else {
                             val salt = Base64.decode(current.salt, Base64.NO_WRAP)
+                            // PBKDF2 is deliberately slow: keep it off the main thread so the UI never freezes.
+                            val candidate = withContext(Dispatchers.Default) { hashPassword(password, salt) }
                             if (username.trim().equals(current.username, ignoreCase = true) &&
-                                hashPassword(password, salt) == current.passwordHash
+                                hashesMatch(candidate, current.passwordHash)
                             ) {
                                 loggedIn = true
                                 error = ""
@@ -179,6 +202,8 @@ private fun LoanApp(db: LoanDatabase) {
                     } catch (e: Exception) {
                         logFailure("auth", e)
                         error = e.userMessage("Could not complete the operation")
+                    } finally {
+                        busy = false
                     }
                 }
             }
@@ -189,24 +214,49 @@ private fun LoanApp(db: LoanDatabase) {
 }
 
 @Composable
-private fun AuthScreen(firstRun: Boolean, error: String, onSubmit: (String, String) -> Unit) {
+private fun AuthScreen(firstRun: Boolean, error: String, busy: Boolean, onSubmit: (String, String) -> Unit) {
     var username by remember { mutableStateOf("admin") }
     var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                        MaterialTheme.colorScheme.background,
+                        BrandNavy,
+                        BrandIndigo,
                         MaterialTheme.colorScheme.background
                     )
                 )
             )
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
     ) {
+        // Soft ambient light behind the card; decorative only.
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 70.dp, y = (-50).dp)
+                .size(260.dp)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(BrandBlue.copy(alpha = 0.40f), Color.Transparent)))
+        )
+        Box(
+            Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = (-90).dp, y = (-120).dp)
+                .size(240.dp)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(BrandLavender.copy(alpha = 0.22f), Color.Transparent)))
+        )
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
         GlassCard(
             modifier = Modifier.fillMaxWidth().widthIn(max = 440.dp),
             elevation = 8.dp
@@ -235,13 +285,28 @@ private fun AuthScreen(firstRun: Boolean, error: String, onSubmit: (String, Stri
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(28.dp))
-            PremiumTextField(username, { username = it }, "Admin username")
+            PremiumTextField(
+                username,
+                { username = it },
+                "Admin username",
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+            )
             Spacer(Modifier.height(12.dp))
             PremiumTextField(
                 password,
                 { password = it },
                 if (firstRun) "Password (at least 6 characters)" else "Password",
-                visualTransformation = PasswordVisualTransformation()
+                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (!busy) onSubmit(username, password) }),
+                trailingIcon = {
+                    IconButton(onClick = { showPassword = !showPassword }) {
+                        Icon(
+                            if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password"
+                        )
+                    }
+                }
             )
             AnimatedVisibility(visible = error.isNotBlank()) {
                 Column {
@@ -263,7 +328,8 @@ private fun AuthScreen(firstRun: Boolean, error: String, onSubmit: (String, Stri
             PremiumPrimaryButton(
                 text = if (firstRun) "Create Account" else "Sign in",
                 onClick = { onSubmit(username, password) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                loading = busy
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -279,6 +345,7 @@ private fun AuthScreen(firstRun: Boolean, error: String, onSubmit: (String, Stri
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
+        }
         }
     }
 }
@@ -311,6 +378,15 @@ private fun MainShell(db: LoanDatabase, onLogout: () -> Unit) {
         launch { dao.borrowerCount().collectLatest { borrowerCount = it } }
         launch { dao.activeLoanCount().collectLatest { activeCount = it } }
         ngoName = dao.setting("ngo_name") ?: "NGO"
+    }
+
+    // Detail screens are state-driven (not routed), so system Back must be handled here or it exits the app.
+    BackHandler(enabled = selectedLoan != null || selectedBorrower != null || page != Page.DASHBOARD) {
+        when {
+            selectedLoan != null -> selectedLoan = null
+            selectedBorrower != null -> selectedBorrower = null
+            else -> page = Page.DASHBOARD
+        }
     }
 
     if (selectedLoan != null) {
@@ -383,7 +459,8 @@ private fun MainShell(db: LoanDatabase, onLogout: () -> Unit) {
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (page) {
+            Crossfade(targetState = page, animationSpec = tween(220), label = "pageTransition") { target ->
+            when (target) {
                 Page.DASHBOARD -> DashboardScreen(
                     ngoName = ngoName,
                     borrowerCount = borrowerCount,
@@ -403,7 +480,7 @@ private fun MainShell(db: LoanDatabase, onLogout: () -> Unit) {
                             PremiumTextField(
                                 search,
                                 { search = it },
-                                "Name / Phone / Member ID Search",
+                                "Search name, phone or member ID",
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(Modifier.width(10.dp))
@@ -487,7 +564,8 @@ private fun MainShell(db: LoanDatabase, onLogout: () -> Unit) {
                     }
                 }
                 Page.REPORTS -> ReportsScreen(db)
-                Page.SETTINGS -> SettingsScreen(db, onLogout)
+                Page.SETTINGS -> SettingsScreen(db, onLogout, onOrgNameSaved = { ngoName = it })
+            }
             }
         }
     }
@@ -626,39 +704,59 @@ private fun DashboardScreen(
         item {
             HeroCard(
                 title = "Welcome, $ngoName",
-                subtitle = "Today's Summary · ${today()}"
-            ) {
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("৳", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                subtitle = "Today's Summary · ${today()}",
+                body = {
+                    Text(
+                        "Total Outstanding (Including Interest)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.88f)
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    AnimatedMoneyText(summary.outstandingPoisha, ::money, MoneyStyleLarge, Color.White)
+                },
+                trailing = {
+                    Box(
+                        Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("৳", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricCard("Total Members", "$borrowerCount", "👤", Modifier.weight(1f), icon = Icons.Default.People)
+                MetricCard("Active Loans", "$activeCount", "📋", Modifier.weight(1f), icon = Icons.Default.AccountBalanceWallet)
             }
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                MetricCard("Total Member", "$borrowerCount", "👤", Modifier.weight(1f))
-                MetricCard("Active Loan", "$activeCount", "📋", Modifier.weight(1f))
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                MetricCard("Total Principal Loan", money(summary.principalPoisha), "৳", Modifier.weight(1f), BrandTeal)
-                MetricCard("Total Collected", money(summary.collectedPoisha), "↓", Modifier.weight(1f), SuccessGreen)
+                MetricCard("Total Principal Loan", money(summary.principalPoisha), "৳", Modifier.weight(1f), accentTeal())
+                MetricCard("Total Collected", money(summary.collectedPoisha), "↓", Modifier.weight(1f), accentSuccess())
             }
         }
         item {
             GlassCard(elevation = 3.dp) {
-                Text("Total Outstanding (Including Interest)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-                Text(money(summary.outstandingPoisha), style = MoneyStyleLarge, color = MaterialTheme.colorScheme.secondary)
-                Spacer(Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Total Payable (Principal + Interest)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(money(summary.totalPayablePoisha), style = MoneyStyleSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Advance Payment", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(money(summary.advancePoisha), style = MoneyStyleSmall, color = accentSuccess())
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    "Total Payable ${money(summary.totalPayablePoisha)} · Advance Payment ${money(summary.advancePoisha)} (excluding cancelled loans and payments)",
+                    "Excludes cancelled loans and payments.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -731,9 +829,12 @@ private fun BorrowerFormDialog(
         shape = DialogShape,
         title = { Text("New Member", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 PremiumTextField(name, { name = it }, "Name *")
-                PremiumTextField(phone, { phone = it }, "Phone")
+                PremiumTextField(phone, { phone = it }, "Phone", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
                 PremiumTextField(address, { address = it }, "Address")
                 PremiumTextField(nid, { nid = it }, "National ID")
                 PremiumTextField(notes, { notes = it }, "Notes", singleLine = false)
@@ -791,7 +892,7 @@ private fun LoanFormDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (borrowers.isEmpty()) {
-                    Text("first Member Add", color = MaterialTheme.colorScheme.error)
+                    Text("Add a member first", color = MaterialTheme.colorScheme.error)
                 } else {
                     Text("Member", style = MaterialTheme.typography.labelMedium)
                     borrowers.take(20).forEach { b ->
@@ -811,9 +912,9 @@ private fun LoanFormDialog(
                         }
                     }
                 }
-                PremiumTextField(principal, { principal = it }, "Loan Principal (Amount)")
-                PremiumTextField(rate, { rate = it }, "Interest Rate (%)")
-                PremiumTextField(term, { term = it }, "Term (months)")
+                PremiumTextField(principal, { principal = it }, "Loan Principal (Amount)", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                PremiumTextField(rate, { rate = it }, "Interest Rate (%)", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                PremiumTextField(term, { term = it }, "Term (months)", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Interest Type:", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.width(8.dp))
@@ -844,10 +945,10 @@ private fun LoanFormDialog(
             }
         },
         confirmButton = {
-            PremiumPrimaryButton("Loan Create", {
+            PremiumPrimaryButton("Create Loan", {
                 localError = ""
                 try {
-                    if (borrowers.isEmpty()) throw UserFacingException("first Member Add")
+                    if (borrowers.isEmpty()) throw UserFacingException("Add a member first")
                     if (borrowerId <= 0) throw UserFacingException("Select a member")
                     val p = InputValidation.takaToPoisha(principal, "Principal Loan")
                     val r = InputValidation.rate(rate)
@@ -857,7 +958,7 @@ private fun LoanFormDialog(
                     if (fd.isBefore(ld)) throw UserFacingException("First installment date cannot be before the loan date")
                     onSave(borrowerId, p, r.toPlainString(), period, tm, ld.toString(), fd.toString(), notes.trim())
                 } catch (e: UserFacingException) {
-                    localError = e.message ?: "Validate input"
+                    localError = e.message ?: "Please check your input"
                 }
             }, loading = saving)
         },
@@ -893,7 +994,7 @@ private fun BorrowerDetailScreen(
             if (borrower.address.isNotBlank()) Text("Address: ${borrower.address}", style = MaterialTheme.typography.bodyMedium)
             if (borrower.nationalId.isNotBlank()) Text("NID: ${borrower.nationalId}", style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(12.dp))
-            PremiumPrimaryButton("New Loan Create", onCreateLoan, Modifier.fillMaxWidth())
+            PremiumPrimaryButton("New Loan", onCreateLoan, Modifier.fillMaxWidth())
         }
         Spacer(Modifier.height(16.dp))
         Text("Member Loans", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
@@ -987,12 +1088,12 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text("Collected", style = MaterialTheme.typography.labelSmall)
-                    Text(money(paid), style = MoneyStyleSmall, color = SuccessGreen)
+                    Text(money(paid), style = MoneyStyleSmall, color = accentSuccess())
                 }
             }
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Outstanding: ${money(outstanding)}", style = MoneyStyleSmall, color = MaterialTheme.colorScheme.secondary)
+                Text("Outstanding: ${money(outstanding)}", style = MoneyStyleSmall, color = accentGold())
                 Text("Advance: ${money(advance)}", style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -1006,7 +1107,7 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
             val statusLabel = when {
                 remaining == 0L -> "Paid"
                 inst.allocatedPoisha > 0 -> "Partial"
-                inst.dueDate < today() -> "Outstanding"
+                inst.dueDate < today() -> "Overdue"
                 else -> "Unpaid"
             }
             GlassCard(elevation = 1.dp, modifier = Modifier.padding(vertical = 4.dp)) {
@@ -1027,7 +1128,7 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
         Text("Payments", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         GlassCard(elevation = 2.dp) {
-            PremiumTextField(amount, { amount = it }, "Amount")
+            PremiumTextField(amount, { amount = it }, "Amount", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             Spacer(Modifier.height(10.dp))
             PremiumTextField(payDate, { payDate = it }, "Date (YYYY-MM-DD)")
             Spacer(Modifier.height(10.dp))
@@ -1066,7 +1167,7 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
                 Text(
                     message,
                     Modifier.padding(top = 10.dp),
-                    color = if (messageOk) SuccessGreen else MaterialTheme.colorScheme.error,
+                    color = if (messageOk) accentSuccess() else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -1081,7 +1182,7 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
                     GlassCard(elevation = 1.dp, modifier = Modifier.padding(vertical = 4.dp)) {
                         Text(p.receiptNo, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "${p.paymentDate} · ${money(p.amountPoisha)}${if (p.cancelled) " · Cancel" else ""}",
+                            "${p.paymentDate} · ${money(p.amountPoisha)}${if (p.cancelled) " · Cancelled" else ""}",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         if (!p.cancelled) {
@@ -1122,7 +1223,7 @@ private fun LoanDetailScreen(db: LoanDatabase, loan: LoanEntity, onBack: () -> U
                     }
                 },
                 confirmButton = {
-                    PremiumPrimaryButton("Cancel Confirm", {
+                    PremiumPrimaryButton("Confirm Cancellation", {
                         if (!cancelling) {
                             cancelling = true
                             cancelError = ""
@@ -1178,15 +1279,15 @@ private fun ReportsScreen(db: LoanDatabase) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MetricCard("Member", "$members", "👤", Modifier.weight(1f))
-            MetricCard("Active Loan", "$active", "📋", Modifier.weight(1f))
+            MetricCard("Members", "$members", "👤", Modifier.weight(1f), icon = Icons.Default.People)
+            MetricCard("Active Loans", "$active", "📋", Modifier.weight(1f), icon = Icons.Default.AccountBalanceWallet)
         }
         MetricCard("Total Principal Loan", money(summary.principalPoisha), "৳")
         MetricCard("Total Interest", money(summary.interestPoisha), "%")
         MetricCard("Total Payable (Principal + Interest)", money(summary.totalPayablePoisha), "৳")
-        MetricCard("Total Collected", money(summary.collectedPoisha), "↓", accent = SuccessGreen)
-        MetricCard("Total Outstanding", money(summary.outstandingPoisha), "!", accent = BrandGold)
-        MetricCard("Advance Payment", money(summary.advancePoisha), "+", accent = SuccessGreen)
+        MetricCard("Total Collected", money(summary.collectedPoisha), "↓", accent = accentSuccess())
+        MetricCard("Total Outstanding", money(summary.outstandingPoisha), "!", accent = accentGold())
+        MetricCard("Advance Payment", money(summary.advancePoisha), "+", accent = accentSuccess())
         GlassCard {
             Text(
                 "Review each loan's details to verify outstanding balance, advances, and cancelled payments.",
@@ -1198,12 +1299,15 @@ private fun ReportsScreen(db: LoanDatabase) {
 }
 
 @Composable
-private fun SettingsScreen(db: LoanDatabase, onLogout: () -> Unit) {
+private fun SettingsScreen(db: LoanDatabase, onLogout: () -> Unit, onOrgNameSaved: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var ngoName by remember { mutableStateOf("") }
     var oldPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
+    var messageOk by remember { mutableStateOf(true) }
+    var savingOrg by remember { mutableStateOf(false) }
+    var changingPassword by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { ngoName = db.dao().setting("ngo_name") ?: "NGO" }
 
     Column(
@@ -1220,67 +1324,128 @@ private fun SettingsScreen(db: LoanDatabase, onLogout: () -> Unit) {
             PremiumTextField(ngoName, { ngoName = it }, "Organization Name")
             Spacer(Modifier.height(12.dp))
             PremiumPrimaryButton(
-                "Settings Save",
+                "Save Settings",
                 {
-                    scope.launch {
-                        db.dao().setSetting(AppSettingEntity("ngo_name", ngoName))
-                        db.dao().audit(
-                            AuditLogEntity(
-                                action = "SETTING_CHANGED",
-                                recordType = "setting",
-                                recordId = "ngo_name",
-                                details = "NGO name updated"
-                            )
-                        )
-                        message = "Settings saved"
-                    }
-                },
-                Modifier.fillMaxWidth()
-            )
-        }
-        GlassCard(elevation = 2.dp) {
-            Text("Admin password Change", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
-            PremiumTextField(oldPassword, { oldPassword = it }, "Current Password", visualTransformation = PasswordVisualTransformation())
-            Spacer(Modifier.height(10.dp))
-            PremiumTextField(newPassword, { newPassword = it }, "New Password (6+ characters)", visualTransformation = PasswordVisualTransformation())
-            Spacer(Modifier.height(12.dp))
-            PremiumPrimaryButton(
-                "Password Change",
-                {
-                    scope.launch {
-                        val admin = db.dao().admin()
-                        if (admin == null || hashPassword(oldPassword, Base64.decode(admin.salt, Base64.NO_WRAP)) != admin.passwordHash) {
-                            message = "Current Incorrect password"
-                        } else if (newPassword.length < 6) {
-                            message = "New Password at least 6 characters must be"
+                    if (!savingOrg) {
+                        val name = ngoName.trim()
+                        if (name.isEmpty()) {
+                            messageOk = false
+                            message = "Enter the organization name"
                         } else {
-                            val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-                            db.dao().saveAdmin(
-                                admin.copy(
-                                    salt = Base64.encodeToString(salt, Base64.NO_WRAP),
-                                    passwordHash = hashPassword(newPassword, salt)
-                                )
-                            )
-                            db.dao().audit(
-                                AuditLogEntity(
-                                    action = "PASSWORD_CHANGED",
-                                    recordType = "admin",
-                                    recordId = "1",
-                                    details = "Admin password changed"
-                                )
-                            )
-                            oldPassword = ""
-                            newPassword = ""
-                            message = "Password changed successfully"
+                            savingOrg = true
+                            scope.launch {
+                                try {
+                                    db.withTransaction {
+                                        db.dao().setSetting(AppSettingEntity("ngo_name", name))
+                                        db.dao().audit(
+                                            AuditLogEntity(
+                                                action = "SETTING_CHANGED",
+                                                recordType = "setting",
+                                                recordId = "ngo_name",
+                                                details = "NGO name updated"
+                                            )
+                                        )
+                                    }
+                                    ngoName = name
+                                    onOrgNameSaved(name)
+                                    messageOk = true
+                                    message = "Settings saved"
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    logFailure("save settings", e)
+                                    messageOk = false
+                                    message = e.userMessage("Could not save settings. Please try again.")
+                                } finally {
+                                    savingOrg = false
+                                }
+                            }
                         }
                     }
                 },
-                Modifier.fillMaxWidth()
+                Modifier.fillMaxWidth(),
+                loading = savingOrg
+            )
+        }
+        GlassCard(elevation = 2.dp) {
+            Text("Change Admin Password", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+            PremiumTextField(
+                oldPassword, { oldPassword = it }, "Current Password",
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next)
+            )
+            Spacer(Modifier.height(10.dp))
+            PremiumTextField(
+                newPassword, { newPassword = it }, "New Password (6+ characters)",
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done)
+            )
+            Spacer(Modifier.height(12.dp))
+            PremiumPrimaryButton(
+                "Change Password",
+                {
+                    if (!changingPassword) {
+                        changingPassword = true
+                        scope.launch {
+                            try {
+                                val admin = db.dao().admin()
+                                // PBKDF2 is slow by design; keep it off the main thread.
+                                val oldHash = if (admin == null) "" else withContext(Dispatchers.Default) {
+                                    hashPassword(oldPassword, Base64.decode(admin.salt, Base64.NO_WRAP))
+                                }
+                                if (admin == null || !hashesMatch(oldHash, admin.passwordHash)) {
+                                    messageOk = false
+                                    message = "Current password is incorrect"
+                                } else if (newPassword.length < 6) {
+                                    messageOk = false
+                                    message = "New password must be at least 6 characters"
+                                } else {
+                                    val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+                                    val newHash = withContext(Dispatchers.Default) { hashPassword(newPassword, salt) }
+                                    db.withTransaction {
+                                        db.dao().saveAdmin(
+                                            admin.copy(
+                                                salt = Base64.encodeToString(salt, Base64.NO_WRAP),
+                                                passwordHash = newHash
+                                            )
+                                        )
+                                        db.dao().audit(
+                                            AuditLogEntity(
+                                                action = "PASSWORD_CHANGED",
+                                                recordType = "admin",
+                                                recordId = "1",
+                                                details = "Admin password changed"
+                                            )
+                                        )
+                                    }
+                                    oldPassword = ""
+                                    newPassword = ""
+                                    messageOk = true
+                                    message = "Password changed successfully"
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logFailure("change password", e)
+                                messageOk = false
+                                message = e.userMessage("Could not change the password. Please try again.")
+                            } finally {
+                                changingPassword = false
+                            }
+                        }
+                    }
+                },
+                Modifier.fillMaxWidth(),
+                loading = changingPassword
             )
         }
         AnimatedVisibility(visible = message.isNotBlank()) {
-            Text(message, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                message,
+                color = if (messageOk) accentSuccess() else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
         BackupSection(db)
         GlassCard {

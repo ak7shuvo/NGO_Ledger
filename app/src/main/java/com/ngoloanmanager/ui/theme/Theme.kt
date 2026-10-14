@@ -6,22 +6,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val LightColors = lightColorScheme(
     primary = BrandNavy,
     onPrimary = Color.White,
-    primaryContainer = TealTint,
+    primaryContainer = IndigoTint,
     onPrimaryContainer = BrandNavy,
-    secondary = BrandGold,
-    onSecondary = BrandNavy,
+    secondary = GoldOnLight,
+    onSecondary = Color.White,
     secondaryContainer = GoldTint,
     onSecondaryContainer = BrandNavy,
-    tertiary = BrandTeal,
-    onTertiary = BrandNavy,
+    tertiary = TealOnLight,
+    onTertiary = Color.White,
+    tertiaryContainer = TealTint,
+    onTertiaryContainer = BrandNavy,
     background = BrandLightGray,
     onBackground = BrandNavy,
     surface = Color.White,
@@ -37,7 +41,7 @@ private val LightColors = lightColorScheme(
     inverseSurface = BrandNavy,
     inverseOnSurface = BrandLightGray,
     inversePrimary = BrandTeal,
-    surfaceTint = BrandNavy
+    surfaceTint = BrandIndigo
 )
 
 private val DarkColors = darkColorScheme(
@@ -49,16 +53,18 @@ private val DarkColors = darkColorScheme(
     onSecondary = BrandNavy,
     secondaryContainer = Color(0xFF4A3F14),
     onSecondaryContainer = GoldTint,
-    tertiary = BrandTeal,
+    tertiary = BrandBlue,
     onTertiary = BrandNavy,
+    tertiaryContainer = BrandIndigo,
+    onTertiaryContainer = BrandLightGray,
     background = DarkBg,
     onBackground = BrandLightGray,
     surface = DarkSurface,
     onSurface = BrandLightGray,
     surfaceVariant = DarkSurfaceVariant,
-    onSurfaceVariant = Color(0xFFCBD5E1),
-    outline = Color(0xFF475569),
-    outlineVariant = Color(0xFF334155),
+    onSurfaceVariant = Color(0xFFC3CBE0),
+    outline = Color(0xFF55607C),
+    outlineVariant = Color(0xFF353F5C),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
     errorContainer = Color(0xFF93000A),
@@ -93,3 +99,21 @@ fun NgoLoanTheme(
         content = content
     )
 }
+
+/** True when the active color scheme is a dark one (derived from the surface so it follows NgoLoanTheme). */
+@Composable
+@ReadOnlyComposable
+fun isDarkSurface(): Boolean = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+
+/** Accent colors that stay readable as TEXT in both themes (brand teal/gold are too light on white). */
+@Composable
+@ReadOnlyComposable
+fun accentTeal(): Color = if (isDarkSurface()) BrandTeal else TealOnLight
+
+@Composable
+@ReadOnlyComposable
+fun accentGold(): Color = if (isDarkSurface()) BrandGold else GoldOnLight
+
+@Composable
+@ReadOnlyComposable
+fun accentSuccess(): Color = if (isDarkSurface()) SuccessGreenDark else SuccessGreen

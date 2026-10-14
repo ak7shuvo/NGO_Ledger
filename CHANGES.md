@@ -1,9 +1,10 @@
 # Premium UI polish (`feature/premium-ui-polish`)
 
-**Verification status: NOT compiled or run locally.** The authoring environment had no Android SDK and could not reach
-Google/Gradle/Maven hosts. Edits were syntax-checked with a Kotlin parser and reviewed by hand, but type/symbol errors,
-unit tests and on-device behaviour are unverified until GitHub Actions (or Android Studio) builds this branch.
-The baseline it builds on was itself never compiled (see the section below).
+**Verification status.** Nothing was compiled locally (the authoring environment had no Android SDK and could not reach
+Google/Gradle/Maven hosts). The code was syntax-checked with a Kotlin parser and reviewed by hand, then built by GitHub Actions on
+commit `1b07f22` (run 38517216496): the **unit-test step and `assembleDebug` both succeeded** on JDK 17 and produced a debug APK artifact.
+That confirms it compiles and the existing 38 unit tests pass. It does **not** confirm how the screens look or behave: no emulator or
+device run, no screenshots, no UI tests, and no release-signed APK have been produced.
 
 ## Visual
 - Palette moved to midnight navy / deep indigo / electric blue / teal / lavender on an off-white background, with matching dark theme.
